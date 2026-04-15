@@ -1,0 +1,14 @@
+train : 
+  plot : 
+
+    gqt2ouaw:
+      slurm_id: 0
+      description: "A.1.1"
+
+    i1r6k503:
+      slurm_id: 0
+      description: "A.1.2"
+
+    w028op9j:
+      slurm_id: 0
+      description: "A.1.3"
