@@ -103,10 +103,10 @@ GOES_ABI_IR :
 #     ens_size : 1
 #     num_layers : 1
 
-HIMAWARI-8_AHI_VIS :
+HIMAWARI_AHI_VIS :
   type : obs
   stream_id : 5
-  filenames : ['observations-file-2015-2022-himawari8-VIS-h512-v1.zarr']
+  filenames : ['observations-file-2015-2022-himawari8-VIS-h512-v1.zarr', 'observations-file-2022-2024-himawari9-VIS-h512-v1.zarr']
   loss_weight : 1.0
   token_size : 128
   tokenize_spacetime : True
@@ -127,10 +127,10 @@ HIMAWARI-8_AHI_VIS :
     ens_size : 1
     num_layers : 1
 
-HIMAWARI-8_AHI_IR :
+HIMAWARI_AHI_IR :
   type : obs
   stream_id : 6
-  filenames : ['observations-file-2015-2022-himawari8-IR-h512-v1.zarr']
+  filenames : ['observations-file-2015-2022-himawari8-IR-h512-v1.zarr', 'observations-file-2022-2024-himawari9-IR-h512-v1.zarr']
   loss_weight : 1.0
   token_size : 128
   tokenize_spacetime : True
@@ -151,82 +151,10 @@ HIMAWARI-8_AHI_IR :
     ens_size : 1
     num_layers : 1
 
-# HIMAWARI-8_AHI_RED :
+# HIMAWARI_AHI_RED :
 #   type : obs
 #   stream_id : 7
-#   filenames : ['observations-file-2015-2022-himawari8-RED-h512-v1.zarr']
-#   loss_weight : 1.0
-#   token_size : 128
-#   tokenize_spacetime : True
-#   max_num_targets: 65536
-#   embed : 
-#     net : transformer
-#     num_tokens : 1
-#     num_heads : 2
-#     dim_embed : 256
-#     num_blocks : 2
-#   embed_target_coords : 
-#     net : linear
-#     dim_embed : 512
-#   target_readout :
-#     num_layers : 2
-#     num_heads : 4
-#   pred_head : 
-#     ens_size : 1
-#     num_layers : 1
-
-HIMAWARI-9_AHI_VIS :
-  type : obs
-  stream_id : 8
-  filenames : ['observations-file-2022-2024-himawari9-VIS-h512-v1.zarr']
-  loss_weight : 1.0
-  token_size : 128
-  tokenize_spacetime : True
-  max_num_targets: 65536
-  embed : 
-    net : transformer
-    num_tokens : 1
-    num_heads : 2
-    dim_embed : 256
-    num_blocks : 2
-  embed_target_coords : 
-    net : linear
-    dim_embed : 512
-  target_readout :
-    num_layers : 2
-    num_heads : 4
-  pred_head : 
-    ens_size : 1
-    num_layers : 1
-
-HIMAWARI-9_AHI_IR :
-  type : obs
-  stream_id : 9
-  filenames : ['observations-file-2022-2024-himawari9-IR-h512-v1.zarr']
-  loss_weight : 1.0
-  token_size : 128
-  tokenize_spacetime : True
-  max_num_targets: 65536
-  embed : 
-    net : transformer
-    num_tokens : 1
-    num_heads : 2
-    dim_embed : 256
-    num_blocks : 2
-  embed_target_coords : 
-    net : linear
-    dim_embed : 512
-  target_readout :
-    num_layers : 2
-    num_heads : 4
-  pred_head : 
-    ens_size : 1
-    num_layers : 1
-
-# HIMAWARI-9_AHI_RED :
-#   type : obs
-#   stream_id : 10
-#   filenames : ['observations-file-2022-2024-himawari9-RED-h512-v1.zarr']
+#   filenames : ['observations-file-2015-2022-himawari8-RED-h512-v1.zarr', 'observations-file-2022-2024-himawari9-RED-h512-v1.zarr']
 #   loss_weight : 1.0
 #   token_size : 128
 #   tokenize_spacetime : True

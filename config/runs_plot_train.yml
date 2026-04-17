@@ -1,14 +1,44 @@
 train : 
   plot : 
 
+    # gqt2ouaw:
+    #   slurm_id: 0
+    #   description: "A.1.1"
+
+    # i1r6k503:
+    #   slurm_id: 0
+    #   description: "A.1.2"
+
+    # w028op9j:
+    #   slurm_id: 0
+    #   description: "A.1.3"
+
+    # ph5c0fa3:
+    #   slurm_id: 0
+    #   description: "ERA5 1deg + GEOs, lr_max: 5e-5"
+
+    # dq61yesk:
+    #   slurm_id: 0
+    #   description: "ERA5 1deg + GEOs, lr_max: 1e-5"
+
+    # z2f1xyo3:
+    #   slurm_id: 0
+    #   description: "ERA5 1deg + GEOs, lr_max: 7e-6"
+
+
+
     gqt2ouaw:
       slurm_id: 0
-      description: "A.1.1"
+      description: "ERA5 O96, 1970-2022"
 
     i1r6k503:
       slurm_id: 0
-      description: "A.1.2"
+      description: "ERA5 O96, 2014-2022"
 
-    w028op9j:
+    q245zrya:
       slurm_id: 0
-      description: "A.1.3"
+      description: "GEOs h512, 2014-2022"
+
+    ph5c0fa3:
+      slurm_id: 0
+      description: "ERA5 O96 + GEOs h512, 2014-2022"
