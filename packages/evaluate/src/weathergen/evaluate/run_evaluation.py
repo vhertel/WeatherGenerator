@@ -28,8 +28,8 @@ from weathergen.evaluate.io.csv_reader import CsvReader
 from weathergen.evaluate.io.merge_reader import WeatherGenMergeReader
 from weathergen.evaluate.io.wegen_reader import (
     WeatherGenJsonReader,
-    WeatherGenReader,
     WeatherGenZarrReader,
+    load_inference_config,
 )
 from weathergen.evaluate.plotting.plot_orchestration import (
     plot_data,
@@ -397,8 +397,10 @@ def evaluate_from_config(cfg: dict, mlflow_client: MlflowClient | None) -> None:
         channels_set = collect_channels(scores_dict, metric, region, runs)
 
         for run_id, run in runs.items():
-            reader = WeatherGenReader(run, run_id, private_paths)
-            from_run_id = reader.inference_cfg["from_run_id"]
+            # Only inference metadata is needed here, so avoid constructing a
+            # full (heavyweight, and abstract) reader.
+            inference_cfg = load_inference_config(run, run_id, private_paths)
+            from_run_id = inference_cfg["from_run_id"]
             parent_run = get_or_create_mlflow_parent_run(mlflow_client, from_run_id)
             _logger.info(f"MLFlow parent run: {parent_run}")
             phase = "eval"

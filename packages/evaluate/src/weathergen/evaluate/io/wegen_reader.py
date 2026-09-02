@@ -40,6 +40,48 @@ _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.INFO)
 
 
+def load_inference_config(
+    eval_cfg: dict, run_id: str, private_paths: dict | None = None
+) -> dict | oc.DictConfig:
+    """
+    Load the config associated to an inference run without constructing a Reader.
+
+    Useful when only inference metadata (e.g. "from_run_id") is needed and the
+    cost of instantiating a full reader (rank file discovery, score loading) is
+    not warranted.
+
+    Parameters
+    ----------
+    eval_cfg : dict
+        Config with plotting and evaluation options for that run id.
+    run_id : str
+        Run identifier of the model.
+    private_paths : dict | None
+        Dictionary of private paths for the supported HPC.
+
+    Returns
+    -------
+    config: dict
+        Configuration file from the inference run. Empty if it cannot be found.
+    """
+    # TODO: remove backwards compatibility to "epoch" in Feb. 2026
+    mini_epoch = eval_cfg.get("mini_epoch", 0)
+
+    if private_paths:
+        _logger.info(f"Loading config for run {run_id} from private paths: {private_paths}")
+        config = load_merge_configs(private_paths, run_id, mini_epoch)
+    else:
+        model_base_dir = eval_cfg.get("model_base_dir")
+        _logger.info(f"Loading config for run {run_id} from model directory: {model_base_dir}")
+        config = load_run_config(run_id, mini_epoch, model_base_dir)
+
+    if not isinstance(config, dict | oc.DictConfig):
+        _logger.warning("Model config not found. inference config will be empty.")
+        config = {}
+
+    return config
+
+
 class WeatherGenReader(Reader):
     def __init__(self, eval_cfg: dict, run_id: str, private_paths: dict | None = None):
         super().__init__(eval_cfg, run_id, private_paths)
@@ -84,24 +126,7 @@ class WeatherGenReader(Reader):
         config: dict
             Configuration file from the inference run
         """
-        config = {}
-
-        if self.private_paths:
-            _logger.info(
-                f"Loading config for run {self.run_id} from private paths: {self.private_paths}"
-            )
-            config = load_merge_configs(self.private_paths, self.run_id, self.mini_epoch)
-        else:
-            _logger.info(
-                f"Loading config for run {self.run_id} from model directory: {self.model_base_dir}"
-            )
-            config = load_run_config(self.run_id, self.mini_epoch, self.model_base_dir)
-
-        if not isinstance(config, dict | oc.DictConfig):
-            _logger.warning("Model config not found. inference config will be empty.")
-            config = {}
-
-        return config
+        return load_inference_config(self.eval_cfg, self.run_id, self.private_paths)
 
     def get_climatology_filename(self, stream: str) -> str | None:
         """
