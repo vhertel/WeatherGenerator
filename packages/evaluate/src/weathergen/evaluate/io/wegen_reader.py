@@ -586,7 +586,9 @@ class WeatherGenZarrReader(WeatherGenReader):
         so that downstream groupby("sample") works correctly.
         """
         merged = {}
-        for fstep, das in all_das.items():
+        # Pop each fstep so per-rank arrays are freed as we go (else peak is 2x the data).
+        for fstep in sorted(all_das):
+            das = all_das.pop(fstep)
             concat_dim = "sample" if "sample" in das[0].dims else "ipoint"
 
             if concat_dim == "ipoint":
@@ -599,6 +601,8 @@ class WeatherGenZarrReader(WeatherGenReader):
                 if len(das) > 1
                 else das[0]
             )
+            # Release the per-rank copies now that they are concatenated.
+            das.clear()
 
             combined = self._reindex_merged_coords(combined, concat_dim, global_sample_coords)
             merged[fstep] = combined
