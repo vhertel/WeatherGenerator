@@ -1,5 +1,6 @@
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -39,47 +40,70 @@ class DeriveChannels:
         self.channels = channels
         self.stream_cfg = stream_cfg
 
-    def calc_xxff_channel(self, da: xr.DataArray, level: str) -> xr.DataArray | None:
+    def configured_components(self, tag: str) -> Mapping | None:
+        """
+        Return the source channels explicitly configured for *tag*, if any.
+
+        ``derive_channels`` accepts either a plain list of tags, in which case the
+        component names are guessed from the level, or a mapping naming the source
+        channels directly::
+
+            derive_channels:
+              "10ff": {u: obsvalue_u, v: obsvalue_v}
+
+        The mapping form is what obs streams need: their channel names do not embed
+        the level (e.g. ``obsvalue_u``), so there is nothing to guess from.
+
+        Args:
+            tag (str): The derived channel tag, e.g. '10ff'.
+
+        Returns:
+            The ``{'u': ..., 'v': ...}`` mapping, or None when the list form is used.
+        """
+        cfg = self.stream_cfg.get("derive_channels")
+        spec = cfg.get(tag) if isinstance(cfg, Mapping) else None
+        return spec if isinstance(spec, Mapping) else None
+
+    def calc_xxff_channel(
+        self, da: xr.DataArray, level: str, components: Mapping | None = None
+    ) -> xr.DataArray | None:
         """
         Calculate wind speed at xx level ('xxff') from wind components or directly.
         Args:
             da: xarray DataArray with data
+            level: level embedded in the tag, e.g. '10' for '10ff'
+            components: optional mapping naming the u/v source channels explicitly,
+                as returned by ``configured_components``
         Returns:
             xarray: Calculated xxff value, or None if calculation is not possible
         """
 
         channels = da.channel.values
 
-        if f"{level}si" not in channels:
-            for suffix in ["u", "v"]:
-                for name in [
+        # An explicit mapping takes precedence over a ready-made wind speed channel:
+        # the user named the components they want the amplitude built from.
+        if components is None and f"{level}si" in channels:
+            return da.sel(channel=f"{level}si")
+
+        wind = {}
+        for suffix in ["u", "v"]:
+            if components is not None and suffix in components:
+                names = [components[suffix]]
+            else:
+                names = [
                     f"{level}{suffix}",
                     f"{suffix}_{level}",
                     f"obsvalue_{suffix}{level}m_0",
-                ]:
-                    component = da.sel(channel=name) if name in channels else None
-                    if component is not None:
-                        break
-                if suffix == "u":
-                    u_component = component if component is not None else None
-                else:
-                    v_component = component if component is not None else None
-            if not (u_component is None or v_component is None):
-                ff = np.sqrt(u_component**2 + v_component**2)
-                return ff
-            else:
-                _logger.debug(
-                    f"u or v not found for level {level} - skipping {level}ff calculation"
-                )
-                return None
-        elif f"{level}si" in channels:
-            ff = da.sel(channel=f"{level}si")
-            return ff
-        else:
-            _logger.debug(f"Skipping {level}ff calculation - unsupported data format")
+                ]
+            wind[suffix] = next((da.sel(channel=name) for name in names if name in channels), None)
+
+        if wind["u"] is None or wind["v"] is None:
+            _logger.debug(f"u or v not found for level {level} - skipping {level}ff calculation")
             return None
 
-    def get_channel(self, data_tars, data_preds, tag, level, calc_func) -> None:
+        return np.sqrt(wind["u"] ** 2 + wind["v"] ** 2)
+
+    def get_channel(self, data_tars, data_preds, tag, level, calc_func, components=None) -> None:
         """
         Add a new channel data to both target and prediction datasets.
 
@@ -99,7 +123,7 @@ class DeriveChannels:
         data_updated = []
 
         for data in [data_tars, data_preds]:
-            new_channel = calc_func(data, level)
+            new_channel = calc_func(data, level, components=components)
 
             if new_channel is not None:
                 conc = xr.concat(
@@ -130,7 +154,9 @@ class DeriveChannels:
 
         Channels to derive are collected from two sources:
 
-        1. The ``derive_channels`` key in the stream config (explicit).
+        1. The ``derive_channels`` key in the stream config (explicit). It is
+           either a list of tags or a mapping of tag to source channels — see
+           ``configured_components``; both forms yield the same tags here.
         2. Any channel in ``self.channels`` that is absent from
            ``self.available_channels`` and whose name matches a known
            derivable pattern (e.g. ``10ff`` — wind speed from u/v).
@@ -166,7 +192,12 @@ class DeriveChannels:
                 level = match.group() if match else None
                 if tag == f"{level}ff":
                     data_tars, data_preds = self.get_channel(
-                        data_tars, data_preds, tag, level, self.calc_xxff_channel
+                        data_tars,
+                        data_preds,
+                        tag,
+                        level,
+                        self.calc_xxff_channel,
+                        components=self.configured_components(tag),
                     )
             else:
                 _logger.debug(
