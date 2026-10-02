@@ -7,6 +7,7 @@ from torch import Tensor
 from weathergen.common.io import IOReaderData
 from weathergen.datasets.utils import (
     locs_to_cell_coords_ctrs,
+    locs_to_ctr_coords,
     r3tos2,
     s2tor3,
 )
@@ -307,7 +308,7 @@ def tokenize_apply_mask_source(
 
 
 def tokenize_apply_mask_target(
-    stream_id,
+    stream_info,
     hl,
     idxs_cells,
     idxs_cells_lens,
@@ -376,7 +377,7 @@ def tokenize_apply_mask_target(
     # compute encoding of target coordinates used in prediction network
     if torch.tensor(idxs_lens).sum() > 0:
         coords_local = get_target_coords_local(
-            stream_id,
+            stream_info,
             hl,
             masked_points_per_cell,
             coords,
@@ -418,7 +419,7 @@ def get_source_coords_local(
 
 
 def get_target_coords_local(
-    stream_id,
+    stream_info,
     hlc,
     masked_points_per_cell,
     coords,
@@ -442,22 +443,58 @@ def get_target_coords_local(
     # target_geoinfos = torch.cat(target_geoinfos)
     # target_times = torch.cat(target_times)
 
+    # Building local coords features tensor for target points
+    cfg_tcoords = stream_info.target_coords
+    target_points = target_coords.shape[0]
+    tcoords_features = []
+
+    if cfg_tcoords.stream_id is True:
+        # stream id constant value
+        tcoords_features.append(
+            torch.full(
+                (target_points, 1),
+                stream_info["stream_id"],
+                dtype=torch.float32,
+                device=target_times.device,
+            )
+        )
+
+    if cfg_tcoords.time_encoding is True:
+        # sin and cos temporal encoding
+        tcoords_features.append(target_times)
+
+    if cfg_tcoords.geoinfo is True:
+        # geoinfo channels
+        tcoords_features.append(target_geoinfos)
+
+    if cfg_tcoords.cartesian_coords is True:
+        # cartesian coords
+        tcoords_features.append(target_coords)
+
+    if cfg_tcoords.relative_coords is True:
+        # local relative coords wrt healpix cell centre
+        relative_coords = compute_relative_coords_local(verts_rots, tcs, verts_local, nctrs)
+        tcoords_features.extend(relative_coords)
+
+    a = torch.cat(tcoords_features, dim=-1).to(torch.float32)
+
+    if cfg_tcoords.abs_coords_hack is True:
+        # hard-coded sin and cos absolute coordinate encoding
+        a[..., -4] = np.sin(coords[:, 0])
+        a[..., -3] = np.cos(coords[:, 0])
+        a[..., -2] = np.sin(coords[:, 1])
+        a[..., -1] = np.cos(coords[:, 1])
+
+    return a
+
+
+def compute_relative_coords_local(verts_rots, tcs, verts_local, nctrs):
+    """Compute relative local coordinates for target coords w.r.t healpix cell vertices and
+    and for healpix cell vertices themselves
+    """
+
+    relative_coords = []
     verts00_rots, verts10_rots, verts11_rots, verts01_rots, vertsmm_rots = verts_rots
-
-    a = torch.zeros(
-        [
-            *target_coords.shape[:-1],
-            1 + target_geoinfos.shape[1] + target_times.shape[1] + 3,  # 5 * (3 * 5) + 3 * 8,
-            # 1 + target_geoinfos.shape[1] + target_times.shape[1] + 5 * (3 * 5) + 3 * 8,
-        ]
-    )
-    a[0] = stream_id
-    geoinfo_offset = 1
-    a[..., geoinfo_offset : geoinfo_offset + target_times.shape[1]] = target_times
-    geoinfo_offset += target_times.shape[1]
-    a[..., geoinfo_offset : geoinfo_offset + target_geoinfos.shape[1]] = target_geoinfos
-    geoinfo_offset += target_geoinfos.shape[1]
-
     ref = torch.tensor([1.0, 0.0, 0.0])
 
     tcs_lens = torch.tensor([tt.shape[0] for tt in tcs], dtype=torch.int32)
@@ -473,52 +510,27 @@ def get_target_coords_local(
     )
     vls = vls.transpose(0, 1)
 
-    zi = 0
-    a[..., (geoinfo_offset + zi) : (geoinfo_offset + zi + 3)] = ref - locs_to_cell_coords_ctrs(
-        verts00_rots, tcs
-    )
+    relative_coords.append(ref - locs_to_cell_coords_ctrs(verts00_rots, tcs))
 
-    # zi = 3
-    # a[..., (geoinfo_offset + zi) : (geoinfo_offset + zi + vls.shape[-1])] = vls[0]
+    relative_coords.append(vls[0])
 
-    # zi = 15
-    # a[..., (geoinfo_offset + zi) : (geoinfo_offset + zi + 3)] = ref - locs_to_cell_coords_ctrs(
-    #     verts10_rots, tcs
-    # )
+    relative_coords.append(ref - locs_to_cell_coords_ctrs(verts10_rots, tcs))
 
-    # zi = 18
-    # a[..., (geoinfo_offset + zi) : (geoinfo_offset + zi + vls.shape[-1])] = vls[1]
+    relative_coords.append(vls[1])
 
-    # zi = 30
-    # a[..., (geoinfo_offset + zi) : (geoinfo_offset + zi + 3)] = ref - locs_to_cell_coords_ctrs(
-    #     verts11_rots, tcs
-    # )
+    relative_coords.append(ref - locs_to_cell_coords_ctrs(verts11_rots, tcs))
 
-    # zi = 33
-    # a[..., (geoinfo_offset + zi) : (geoinfo_offset + zi + vls.shape[-1])] = vls[2]
+    relative_coords.append(vls[2])
 
-    # zi = 45
-    # a[..., (geoinfo_offset + zi) : (geoinfo_offset + zi + 3)] = ref - locs_to_cell_coords_ctrs(
-    #     verts01_rots, tcs
-    # )
+    relative_coords.append(ref - locs_to_cell_coords_ctrs(verts01_rots, tcs))
 
-    # zi = 48
-    # a[..., (geoinfo_offset + zi) : (geoinfo_offset + zi + vls.shape[-1])] = vls[3]
+    relative_coords.append(vls[3])
 
-    # zi = 60
-    # a[..., (geoinfo_offset + zi) : (geoinfo_offset + zi + 3)] = ref - locs_to_cell_coords_ctrs(
-    #     vertsmm_rots, tcs
-    # )
+    relative_coords.append(ref - locs_to_cell_coords_ctrs(vertsmm_rots, tcs))
 
-    # zi = 63
-    # a[..., (geoinfo_offset + zi) : (geoinfo_offset + zi + vls.shape[-1])] = vls[4]
+    relative_coords.append(vls[4])
 
-    # tcs_ctrs = torch.cat([ref - torch.cat(locs_to_ctr_coords(c, tcs)) for c in nctrs], -1)
-    # zi = 75
-    # a[..., (geoinfo_offset + zi) : (geoinfo_offset + zi + (3 * 8))] = tcs_ctrs
+    tcs_ctrs = torch.cat([ref - torch.cat(locs_to_ctr_coords(c, tcs)) for c in nctrs], -1)
+    relative_coords.append(tcs_ctrs)
 
-    # # remaining geoinfos (zenith angle etc)
-    # zi = 99
-    # a[..., (geoinfo_offset + zi) :] = target_coords[..., (geoinfo_offset + 2) :]
-
-    return a
+    return relative_coords

@@ -167,7 +167,7 @@ class TokenizerMasking(Tokenizer):
 
         # TODO: split up
         _, _, _, coords_local, coords_per_cell = tokenize_apply_mask_target(
-            stream_info["stream_id"],
+            stream_info,
             self.hl_target,
             idxs_cells,
             idxs_cells_lens,
@@ -199,7 +199,7 @@ class TokenizerMasking(Tokenizer):
         )
 
         data, datetimes, coords, _, _ = tokenize_apply_mask_target(
-            stream_info["stream_id"],
+            stream_info,
             self.hl_target,
             idxs_cells,
             idxs_cells_lens,

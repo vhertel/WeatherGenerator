@@ -367,13 +367,34 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
         return [ds.readers[0].get_target_num_channels() for ds in self.streams_datasets.values()]
 
     def get_targets_coords_size(self):
-        # TODO: avoid hard coding magic values
-        # +6 at the end for stream_id and time encoding
-        return [
-            # (ds.readers[0].get_geoinfo_size() + (5 * (3 * 5)) + 3 * 8) + 6
-            (ds.readers[0].get_geoinfo_size() + 3) + 6
-            for ds in self.streams_datasets.values()
-        ]
+        # computing target coords size based on the features specified in the stream config
+
+        targets_coords_size = []
+        for ds in self.streams_datasets.values():
+            features_per_stream = 0
+            if ds.info.target_coords.stream_id is True:
+                # stream id constant value
+                features_per_stream += 1
+
+            if ds.info.target_coords.time_encoding is True:
+                # sin and cos temporal encoding
+                features_per_stream += 5
+
+            if ds.info.target_coords.geoinfo is True:
+                # geoinfo channels
+                features_per_stream += ds.readers[0].get_geoinfo_size()
+
+            if ds.info.target_coords.cartesian_coords is True:
+                # cartesian coords
+                features_per_stream += 3
+
+            if ds.info.target_coords.relative_coords is True:
+                # local relative coords wrt healpix cell centre
+                features_per_stream += (5 * (3 * 5)) + 3 * 8
+
+            targets_coords_size.append(features_per_stream)
+
+        return targets_coords_size
 
     def denormalize_source_channels(self, stream_name, data) -> torch.Tensor:
         # [0]: with multiple ds per stream we use the first one
