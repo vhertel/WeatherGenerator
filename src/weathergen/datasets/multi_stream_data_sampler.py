@@ -381,13 +381,11 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
             features_per_stream = 0
             assert ds.info.target_coords.abs_coords in (False, True, "sincos_deg", "geoinfo")
 
-            if ds.info.target_coords.stream_id is True:
-                # stream id constant value
-                features_per_stream += 1
+            # stream id constant value
+            features_per_stream += 1
 
-            if ds.info.target_coords.time_encoding is True:
-                # sin and cos temporal encoding
-                features_per_stream += 5
+            # sin and cos temporal encoding
+            features_per_stream += 5
 
             # geoinfo channels
             features_per_stream += ds.readers[0].get_geoinfo_size()

@@ -448,20 +448,18 @@ def get_target_coords_local(
     target_points = target_coords.shape[0]
     tcoords_features = []
 
-    if cfg_tcoords.stream_id is True:
-        # stream id constant value
-        tcoords_features.append(
-            torch.full(
-                (target_points, 1),
-                stream_info["stream_id"],
-                dtype=torch.float32,
-                device=target_times.device,
-            )
+    # stream id constant value
+    tcoords_features.append(
+        torch.full(
+            (target_points, 1),
+            stream_info["stream_id"],
+            dtype=torch.float32,
+            device=target_times.device,
         )
+    )
 
-    if cfg_tcoords.time_encoding is True:
-        # sin and cos temporal encoding
-        tcoords_features.append(target_times)
+    # sin and cos temporal encoding
+    tcoords_features.append(target_times)
 
     # geoinfo channels
     tcoords_features.append(target_geoinfos)
