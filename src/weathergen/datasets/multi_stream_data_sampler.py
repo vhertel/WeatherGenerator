@@ -390,9 +390,24 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
             # geoinfo channels
             features_per_stream += ds.readers[0].get_geoinfo_size()
 
-            if ds.info.target_coords.relative_coords is True:
-                # local relative coords wrt healpix cell centre
-                features_per_stream += (5 * (3 * 5)) + 3 * 8
+            # local coords: each flag enabled in the stream config adds its features
+            cfg_lcoords = ds.info.target_coords.local_coords
+            if cfg_lcoords.relative_to_single_point is not False:
+                # position of target points wrt a single point of healpix cell
+                features_per_stream += 3
+
+            if cfg_lcoords.relative_to_all_points is True:
+                # position of target points wrt all other points of healpix cell
+                num_points = 4 if cfg_lcoords.relative_to_single_point is not False else 5
+                features_per_stream += num_points * 3
+
+            if cfg_lcoords.cell_shape is True:
+                # positions of the points of healpix cell wrt each other
+                features_per_stream += 5 * (4 * 3)
+
+            if cfg_lcoords.relative_to_nbors is True:
+                # position of target points wrt centers of neighboring healpix cells
+                features_per_stream += 8 * 3
 
             if ds.info.target_coords.abs_coords in (True, "sincos_deg"):
                 # hard-coded sin and cos absolute coordinate encoding

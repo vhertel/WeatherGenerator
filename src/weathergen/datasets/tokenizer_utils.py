@@ -464,10 +464,11 @@ def get_target_coords_local(
     # geoinfo channels
     tcoords_features.append(target_geoinfos)
 
-    if cfg_tcoords.relative_coords is True:
-        # local relative coords wrt healpix cell centre
-        relative_coords = compute_relative_coords_local(verts_rots, tcs, verts_local, nctrs)
-        tcoords_features.extend(relative_coords)
+    # local coords: each flag enabled in the stream config adds its features
+    local_coords = compute_local_coords(
+        cfg_tcoords.local_coords, verts_rots, tcs, verts_local, nctrs
+    )
+    tcoords_features.extend(local_coords)
 
     if cfg_tcoords.abs_coords in (True, "sincos_deg"):
         # hard-coded sin and cos absolute coordinate encoding
@@ -483,49 +484,53 @@ def get_target_coords_local(
     return a
 
 
-def compute_relative_coords_local(verts_rots, tcs, verts_local, nctrs):
-    """Compute relative local coordinates for target coords w.r.t healpix cell vertices and
-    and for healpix cell vertices themselves
+def compute_local_coords(cfg_lcoords, verts_rots, tcs, verts_local, nctrs):
+    """Compute local coordinates for target coords.
+    Each set enabled in cfg_lcoords adds its features.
     """
 
-    relative_coords = []
+    local_coords = []
     verts00_rots, verts10_rots, verts11_rots, verts01_rots, vertsmm_rots = verts_rots
     ref = torch.tensor([1.0, 0.0, 0.0])
 
-    tcs_lens = torch.tensor([tt.shape[0] for tt in tcs], dtype=torch.int32)
-    tcs_lens_mask = tcs_lens > 0
-    tcs_lens = tcs_lens[tcs_lens_mask]
+    # points of healpix cell
+    cell_points_rots = {
+        "south_vertex": verts00_rots,
+        "east_vertex": verts10_rots,
+        "north_vertex": verts11_rots,
+        "west_vertex": verts01_rots,
+        "center": vertsmm_rots,
+    }
 
-    vls = torch.cat(
-        [
-            vl.repeat([tt, 1, 1])
-            for tt, vl in zip(tcs_lens, verts_local[tcs_lens_mask], strict=False)
-        ],
-        0,
-    )
-    vls = vls.transpose(0, 1)
+    if cfg_lcoords.relative_to_single_point is not False:
+        # position of target points wrt a single point of healpix cell
+        rots = cell_points_rots[cfg_lcoords.relative_to_single_point]
+        local_coords.append(ref - locs_to_cell_coords_ctrs(rots, tcs))
 
-    relative_coords.append(ref - locs_to_cell_coords_ctrs(verts00_rots, tcs))
+    if cfg_lcoords.relative_to_all_points is True:
+        # position of target points wrt all other points of healpix cell
+        for name, rots in cell_points_rots.items():
+            if name != cfg_lcoords.relative_to_single_point:
+                local_coords.append(ref - locs_to_cell_coords_ctrs(rots, tcs))
 
-    relative_coords.append(vls[0])
+    if cfg_lcoords.cell_shape is True:
+        # positions of the points of healpix cell wrt each other
+        tcs_lens = torch.tensor([tt.shape[0] for tt in tcs], dtype=torch.int32)
+        tcs_lens_mask = tcs_lens > 0
+        tcs_lens = tcs_lens[tcs_lens_mask]
 
-    relative_coords.append(ref - locs_to_cell_coords_ctrs(verts10_rots, tcs))
+        vls = torch.cat(
+            [
+                vl.repeat([tt, 1, 1])
+                for tt, vl in zip(tcs_lens, verts_local[tcs_lens_mask], strict=False)
+            ],
+            0,
+        )
+        local_coords.append(vls.flatten(1, 2))
 
-    relative_coords.append(vls[1])
+    if cfg_lcoords.relative_to_nbors is True:
+        # position of target points wrt centers of neighboring healpix cells
+        tcs_ctrs = torch.cat([ref - torch.cat(locs_to_ctr_coords(c, tcs)) for c in nctrs], -1)
+        local_coords.append(tcs_ctrs)
 
-    relative_coords.append(ref - locs_to_cell_coords_ctrs(verts11_rots, tcs))
-
-    relative_coords.append(vls[2])
-
-    relative_coords.append(ref - locs_to_cell_coords_ctrs(verts01_rots, tcs))
-
-    relative_coords.append(vls[3])
-
-    relative_coords.append(ref - locs_to_cell_coords_ctrs(vertsmm_rots, tcs))
-
-    relative_coords.append(vls[4])
-
-    tcs_ctrs = torch.cat([ref - torch.cat(locs_to_ctr_coords(c, tcs)) for c in nctrs], -1)
-    relative_coords.append(tcs_ctrs)
-
-    return relative_coords
+    return local_coords
