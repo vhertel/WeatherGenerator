@@ -222,6 +222,13 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
         streams_datasets: dict[StreamName, _Stream] = {}
         for stream_name, stream_info in cf.streams.items():
             stream_info["data_paths"] = cf.get("data_paths", [])
+            if stream_info.target_coords.abs_coords == "geoinfo":
+                # absolute coords as additional, hard-coded geoinfo channels
+                abs_coords = ["cos_latitude", "sin_latitude", "cos_longitude", "sin_longitude"]
+                geoinfos = list(stream_info.get("geoinfo_channels") or [])
+                stream_info["geoinfo_channels"] = geoinfos + [
+                    c for c in abs_coords if c not in geoinfos
+                ]
             # list of sources for current stream
             streams_datasets[stream_name] = _Stream(stream_info, [])
             kwargs = {
@@ -372,6 +379,8 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
         targets_coords_size = []
         for ds in self.streams_datasets.values():
             features_per_stream = 0
+            assert ds.info.target_coords.abs_coords in (False, True, "sincos_deg", "geoinfo")
+
             if ds.info.target_coords.stream_id is True:
                 # stream id constant value
                 features_per_stream += 1
@@ -380,17 +389,16 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
                 # sin and cos temporal encoding
                 features_per_stream += 5
 
-            if ds.info.target_coords.geoinfo is True:
-                # geoinfo channels
-                features_per_stream += ds.readers[0].get_geoinfo_size()
-
-            if ds.info.target_coords.cartesian_coords is True:
-                # cartesian coords
-                features_per_stream += 3
+            # geoinfo channels
+            features_per_stream += ds.readers[0].get_geoinfo_size()
 
             if ds.info.target_coords.relative_coords is True:
                 # local relative coords wrt healpix cell centre
                 features_per_stream += (5 * (3 * 5)) + 3 * 8
+
+            if ds.info.target_coords.abs_coords in (True, "sincos_deg"):
+                # hard-coded sin and cos absolute coordinate encoding
+                features_per_stream += 4
 
             targets_coords_size.append(features_per_stream)
 

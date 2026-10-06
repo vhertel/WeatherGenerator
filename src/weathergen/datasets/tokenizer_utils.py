@@ -463,27 +463,24 @@ def get_target_coords_local(
         # sin and cos temporal encoding
         tcoords_features.append(target_times)
 
-    if cfg_tcoords.geoinfo is True:
-        # geoinfo channels
-        tcoords_features.append(target_geoinfos)
-
-    if cfg_tcoords.cartesian_coords is True:
-        # cartesian coords
-        tcoords_features.append(target_coords)
+    # geoinfo channels
+    tcoords_features.append(target_geoinfos)
 
     if cfg_tcoords.relative_coords is True:
         # local relative coords wrt healpix cell centre
         relative_coords = compute_relative_coords_local(verts_rots, tcs, verts_local, nctrs)
         tcoords_features.extend(relative_coords)
 
-    a = torch.cat(tcoords_features, dim=-1).to(torch.float32)
-
-    if cfg_tcoords.abs_coords_hack is True:
+    if cfg_tcoords.abs_coords in (True, "sincos_deg"):
         # hard-coded sin and cos absolute coordinate encoding
-        a[..., -4] = np.sin(coords[:, 0])
-        a[..., -3] = np.cos(coords[:, 0])
-        a[..., -2] = np.sin(coords[:, 1])
-        a[..., -1] = np.cos(coords[:, 1])
+        # ("sincos_deg": sin and cos of lat/lon in degrees, only kept as reference)
+        lat_lon = coords if cfg_tcoords.abs_coords == "sincos_deg" else torch.deg2rad(coords)
+        tcoords_features.append(torch.sin(lat_lon[:, [0]]))
+        tcoords_features.append(torch.cos(lat_lon[:, [0]]))
+        tcoords_features.append(torch.sin(lat_lon[:, [1]]))
+        tcoords_features.append(torch.cos(lat_lon[:, [1]]))
+
+    a = torch.cat(tcoords_features, dim=-1).to(torch.float32)
 
     return a
 
