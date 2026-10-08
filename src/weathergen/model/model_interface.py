@@ -315,8 +315,10 @@ def load_model(cf, model, device, run_id: str, with_ddp: bool, with_fsdp: bool, 
                 if not any(path.startswith(root + ".") for root in root_new_modules):
                     root_new_modules.add(path)
 
-            # Get all modules for quick lookup and initialize the new ones
-            all_modules = dict(model.named_modules())
+            # Get all modules for quick lookup and initialize the new ones; a module registered
+            # under several names (e.g. the norm of an MLP, also held in its layer list) has to
+            # be found under each of them
+            all_modules = dict(model.named_modules(remove_duplicate=False))
             for path in root_new_modules:
                 if is_root():
                     logger.info(f"Initializing new module not found in checkpoint: {path}")
