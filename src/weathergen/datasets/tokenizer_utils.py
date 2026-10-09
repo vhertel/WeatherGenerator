@@ -502,15 +502,15 @@ def compute_local_coords(cfg_lcoords, verts_rots, tcs, verts_local, nctrs):
         "center": vertsmm_rots,
     }
 
-    if cfg_lcoords.relative_to_single_point is not False:
-        # position of target points wrt a single point of healpix cell
-        rots = cell_points_rots[cfg_lcoords.relative_to_single_point]
-        local_coords.append(ref - locs_to_cell_coords_ctrs(rots, tcs))
+    if cfg_lcoords.relative_to_reference_point is not False:
+        if cfg_lcoords.relative_to_reference_point != "all":
+            # position of target points wrt a single reference point of healpix cell
+            rots = cell_points_rots[cfg_lcoords.relative_to_reference_point]
+            local_coords.append(ref - locs_to_cell_coords_ctrs(rots, tcs))
 
-    if cfg_lcoords.relative_to_all_points is True:
-        # position of target points wrt all other points of healpix cell
-        for name, rots in cell_points_rots.items():
-            if name != cfg_lcoords.relative_to_single_point:
+        else:
+            # position of target points wrt all reference points of healpix cell
+            for _name, rots in cell_points_rots.items():
                 local_coords.append(ref - locs_to_cell_coords_ctrs(rots, tcs))
 
     if cfg_lcoords.cell_shape is True:

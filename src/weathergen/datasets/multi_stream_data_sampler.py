@@ -392,14 +392,13 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
 
             # local coords: each flag enabled in the stream config adds its features
             cfg_lcoords = ds.info.target_coords.local_coords
-            if cfg_lcoords.relative_to_single_point is not False:
-                # position of target points wrt a single point of healpix cell
-                features_per_stream += 3
-
-            if cfg_lcoords.relative_to_all_points is True:
-                # position of target points wrt all other points of healpix cell
-                num_points = 4 if cfg_lcoords.relative_to_single_point is not False else 5
-                features_per_stream += num_points * 3
+            if cfg_lcoords.relative_to_reference_point is not False:
+                if cfg_lcoords.relative_to_reference_point != "all":
+                    # position of target points wrt a single reference point of healpix cell
+                    features_per_stream += 3
+                else:
+                    # position of target points wrt all reference points of healpix cell
+                    features_per_stream += 5 * 3
 
             if cfg_lcoords.cell_shape is True:
                 # positions of the points of healpix cell wrt each other
