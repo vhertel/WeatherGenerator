@@ -1,0 +1,30 @@
+# (C) Copyright 2026 WeatherGenerator contributors.
+#
+# This software is licensed under the terms of the Apache Licence Version 2.0
+# which can be obtained at http://www.apache.org/licenses/LICENSE-2.0.
+#
+# In applying this licence, ECMWF does not waive the privileges and immunities
+# granted to it by virtue of its status as an intergovernmental organisation
+# nor does it submit to any jurisdiction.
+
+# Offgrid variant of the era5_1deg_forecasting stream. Identical to that stream
+# except for `type`, `base_type` and the `offgrid` block; everything else must
+# match the stream the model was trained on, since channel order and
+# normalization statistics are read from the real dataset below.
+
+ERA5 :
+  type : offgrid
+  stream_id : 0
+  # reader used for the underlying dataset
+  base_type : anemoi
+  # exactly one entry: the dataset is used for channel metadata and
+  # normalization statistics only. Its values are never returned.
+  filenames : ['aifs-ea-an-oper-0001-mars-o96-1979-2024-1h-v3-with-era51.zarr']
+  offgrid :
+    # (N, 2) array of [lat, lon] in degrees; must be an absolute path
+    coords : /e/scratch/weatherai/shared_work/offgrid-test/offgrid_regular.npy
+    # (N, G) array, G == len(geoinfo_channels); omit or set null if unavailable;
+    # must be an absolute path
+    geoinfos : /e/scratch/weatherai/shared_work/offgrid-test/offgrid_regular_geoinfos.npy
+    # temporal spacing between offgrid samples; defaults to time_window_step
+    frequency : 6h
