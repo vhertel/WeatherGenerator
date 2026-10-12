@@ -7,7 +7,37 @@
 # granted to it by virtue of its status as an intergovernmental organisation
 # nor does it submit to any jurisdiction.
 
+"""
+Data reader for offgrid inference.
+
+Runs a trained model at an arbitrary set of points instead of the points of the dataset it was
+trained on. The stream is taken from the config of the trained model (``--from-run-id``) and
+an overwrite config switches its reader to this one::
+
+    streams:
+      ERA5:
+        type: offgrid
+        base_type: anemoi
+        offgrid:
+          coords: /abs/path/coords.npy
+          geoinfos: /abs/path/geoinfos.npy
+          frequency: 6h
+
+``base_type`` is the reader type the stream was trained with, i.e. its ``type`` in the config of
+the trained model. It has to be repeated because ``type`` now selects this reader.
+
+``coords`` is a file with the points or the name of a default grid, e.g. ``o96`` or ``N320``
+(see ``_grid_coords``). All points are returned: ``max_num_targets`` of the trained model is not
+applied; set ``offgrid.max_num_targets`` to limit them.
+
+The coordinates and geoinfos come from the offgrid files instead of the dataset, and ``_get``
+returns placeholder values instead of data. Channels and normalization are taken from the
+reader of ``base_type``, so they are the ones the model was trained with, whatever the format
+of the dataset. The layout follows ``DataReaderAnemoi``.
+"""
+
 import logging
+import re
 from pathlib import Path
 from typing import override
 
@@ -15,6 +45,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from weathergen.common.config import parse_timedelta
+from weathergen.datasets.data_reader_anemoi import DataReaderAnemoi
 from weathergen.datasets.data_reader_base import (
     DataReaderTimestep,
     ReaderData,
@@ -22,33 +53,15 @@ from weathergen.datasets.data_reader_base import (
     TIndex,
     check_reader_data,
 )
-from weathergen.train.utils import Stage
+from weathergen.datasets.data_reader_obs import DataReaderObs
+from weathergen.readers_extra.registry import get_extra_reader
+from weathergen.train.utils import TRAIN, Stage
 
 _logger = logging.getLogger(__name__)
 
 
 class DataReaderOffgrid(DataReaderTimestep):
-    """Reader that evaluates a stream at an arbitrary set of points.
-
-    Instead of returning the stream's own data, this reader returns a fixed
-    coordinate template repeated at a configurable frequency across the time
-    window. Channel identity and normalization statistics are read from the
-    stream's real dataset (see `_read_reference_metadata`), so the model sees
-    a stream that is identical in every respect except where it is sampled.
-
-    Configured entirely from the stream config::
-
-        ERA5_offgrid:
-          type: offgrid
-          base_type: anemoi
-          filenames: ['era5.zarr']
-          offgrid:
-            coords: /abs/path/offgrid_regular.npy
-            geoinfos: /abs/path/offgrid_regular_geoinfos.npy
-            frequency: 6h
-
-    ``offgrid.coords`` and ``offgrid.geoinfos`` must be absolute paths.
-    """
+    "Reader for inference at arbitrary points with a stream of a trained model"
 
     def __init__(
         self,
@@ -57,147 +70,113 @@ class DataReaderOffgrid(DataReaderTimestep):
         stream_info: dict,
         stage: Stage,
     ) -> None:
-        """Construct an offgrid reader.
+        """
+        Construct data reader for offgrid inference
 
         Parameters
         ----------
-        tw_handler :
-            Time window handler defining the inference window.
         filename :
-            Resolved path to the stream's real dataset, used to read channel
-            identity and normalization statistics.
+            filename (and path) of the dataset of the stream
         stream_info :
-            Stream configuration. Must contain ``base_type`` and an ``offgrid``
-            block with at least ``coords``.
-        stage :
-            Pipeline stage. Unused here; accepted because the generic reader
-            dispatch in `_init_stream_datasets` always passes it.
+            information about stream. Keys beyond the common ones: ``base_type`` (reader type
+            the stream was trained with) and ``offgrid`` with ``coords`` (file with an (N, 2)
+            array of [lat, lon] in degrees, or the name of a default grid such as ``o96`` or
+            ``N320``), ``geoinfos`` ((N, G) array with one column per geoinfo channel of the
+            stream; needed if the stream has geoinfo channels), ``frequency`` (spacing of the
+            offgrid samples; default is the time window step) and ``max_num_targets`` (default
+            is -1, i.e. all points).
+
+        Returns
+        -------
+        None
         """
-        name = stream_info.get("name", "<unnamed>")
 
-        offgrid_cfg = stream_info.get("offgrid")
-        if offgrid_cfg is None:
-            msg = f"Stream '{name}' has type 'offgrid' but no 'offgrid' config block."
-            raise ValueError(msg)
+        ds_name = stream_info["name"]
+        offgrid = stream_info["offgrid"]
 
-        # TODO
-        # A single template is emitted per reader, so several filenames would
-        # produce the same points several times over.
-        filenames = stream_info.get("filenames", [])
-        if len(filenames) > 1:
-            msg = (
-                f"Stream '{name}': offgrid streams accept at most one entry in "
-                f"'filenames', got {len(filenames)}. The template would otherwise be "
-                "emitted once per file."
-            )
-            raise ValueError(msg)
+        # there is no data at the offgrid points, hence nothing to train on
+        assert stage != TRAIN, f"{ds_name}: offgrid streams are for inference only."
+        # the offgrid points would otherwise be returned once per file
+        assert len(stream_info.get("filenames", [])) <= 1, (
+            f"{ds_name}: offgrid streams take at most one entry in 'filenames'."
+        )
 
-        coords_cfg = offgrid_cfg.get("coords")
-        if coords_cfg is None:
-            msg = f"Stream '{name}': offgrid.coords is required."
-            raise ValueError(msg)
-        coords_path = Path(coords_cfg)
-        if not coords_path.exists():
-            msg = f"Stream '{name}': offgrid.coords not found: {coords_path}"
-            raise FileNotFoundError(msg)
-
-        geoinfos_cfg = offgrid_cfg.get("geoinfos")
-        geoinfos_path = Path(geoinfos_cfg) if geoinfos_cfg is not None else None
-        if geoinfos_path is not None and not geoinfos_path.exists():
-            msg = f"Stream '{name}': offgrid.geoinfos not found: {geoinfos_path}"
-            raise FileNotFoundError(msg)
-
-        # Sampling frequency of the template; defaults to the time window step.
-        frequency = offgrid_cfg.get("frequency", tw_handler.t_window_step)
-        period = parse_timedelta(frequency)
-
-        # initialize base class with time window and frequency info
+        # the offgrid samples cover the data loader window at a fixed frequency
+        period = parse_timedelta(offgrid.get("frequency", tw_handler.t_window_step))
         super().__init__(
             tw_handler,
             stream_info,
-            data_start_time=tw_handler.t_start,
-            data_end_time=tw_handler.t_end,
-            period=period,
+            tw_handler.t_start,
+            tw_handler.t_end,
+            period,
+        )
+        self.len = int((tw_handler.t_end - tw_handler.t_start) / period)
+
+        # reader the stream was trained with, selected as in MultiStreamDataSampler; it provides
+        # the channels and the normalization, no data is read from it
+        match stream_info["base_type"]:
+            case "obs":
+                dataset = DataReaderObs
+            case "anemoi":
+                dataset = DataReaderAnemoi
+            case type_name:
+                dataset = get_extra_reader(type_name)
+        assert dataset not in (None, DataReaderOffgrid), (
+            f"{ds_name}: unsupported base_type '{stream_info['base_type']}'."
+        )
+        self.reader = dataset(
+            tw_handler=tw_handler, filename=filename, stream_info=stream_info, stage=stage
+        )
+        # readers come up empty if their dataset has no data in the data loader window
+        assert len(self.reader.source_channels) + len(self.reader.target_channels) > 0, (
+            f"{ds_name}: the {stream_info['base_type']} reader has no channels; the data loader "
+            f"window probably does not overlap the dates of {filename}."
         )
 
-        # load and validate coordinate template
-        coords_arr = np.load(coords_path)
-        if coords_arr.ndim != 2 or coords_arr.shape[1] != 2:
-            msg = (
-                f"Stream '{name}': template must be .npy with shape (N, 2) "
-                f"[lat, lon], got {coords_arr.shape}"
-            )
-            raise ValueError(msg)
-
-        # caches lats and lons
-        self.latitudes = _clip_lat(coords_arr[:, 0])
-        self.longitudes = _clip_lon(coords_arr[:, 1])
-        self._latlon = np.stack([self.latitudes, self.longitudes], axis=1)
-
-        # number of template points and available temporal samples
-        self.n_points = len(self.latitudes)
-        self.len = max(0, int((tw_handler.t_end - tw_handler.t_start) / period))
-
-        # Read channel identity and normalization statistics from the real
-        # dataset. Everything except the sampling locations comes from here.
-        (
-            self.source_channels,
-            self.source_idx,
-            self.target_channels,
-            self.target_idx,
-            self.target_channel_weights,
-            self.mean,
-            self.stdev,
-        ) = _read_reference_metadata(filename, stream_info)
-
-        # load optional geoinfos and validate row/column alignment
-        geoinfo_channels_cfg = list(stream_info.get("geoinfo_channels") or [])
-        if geoinfos_path is not None:
-            geoinfo_arr = np.load(geoinfos_path)
-            if geoinfo_arr.ndim != 2 or geoinfo_arr.shape[0] != self.n_points:
-                msg = (
-                    f"Stream '{name}': geoinfos file {geoinfos_path} has shape "
-                    f"{geoinfo_arr.shape}, expected ({self.n_points}, G)."
-                )
-                raise ValueError(msg)
-            if geoinfo_arr.shape[1] != len(geoinfo_channels_cfg):
-                msg = (
-                    f"Stream '{name}': geoinfos file {geoinfos_path} has "
-                    f"{geoinfo_arr.shape[1]} columns but geoinfo_channels lists "
-                    f"{len(geoinfo_channels_cfg)} entries."
-                )
-                raise ValueError(msg)
-            self.geoinfos = geoinfo_arr.astype(np.float32)
+        # caches lats and lons; coords names a default grid or a file with the points
+        if re.fullmatch(r"[oOnN]\d+", str(offgrid["coords"])):
+            coords = _grid_coords(offgrid["coords"])
         else:
-            if len(geoinfo_channels_cfg) > 0:
-                _logger.warning(
-                    f"Stream '{name}': geoinfo_channels configured but no geoinfo "
-                    ".npy file was provided; offgrid reader will use empty geoinfos."
-                )
-            geoinfo_channels_cfg = []
-            self.geoinfos = np.zeros((self.n_points, 0), dtype=np.float32)
+            coords = np.load(offgrid["coords"])
+        assert coords.ndim == 2 and coords.shape[1] == 2, (
+            f"{ds_name}: offgrid.coords must have shape (N, 2) for [lat, lon], got {coords.shape}."
+        )
+        self.latitudes = _clip_lat(coords[:, 0])
+        self.longitudes = _clip_lon(coords[:, 1])
 
-        # geoinfo metadata and normalization statistics
-        self.geoinfo_channels = geoinfo_channels_cfg
-        self.geoinfo_idx = np.arange(len(self.geoinfo_channels), dtype=np.int64)
-        self.mean_geoinfo, self.stdev_geoinfo = _geoinfo_stats(self.geoinfos)
+        # all offgrid points are returned by default; max_num_targets of the trained model is a
+        # training setting and would drop a random part of them
+        stream_info["max_num_targets"] = offgrid.get("max_num_targets", -1)
 
-        _logger.info(
-            f"{name}: offgrid reader active over {self.n_points} points "
-            f"(base_type={stream_info['base_type']}, source={len(self.source_channels)}, "
-            f"target={len(self.target_channels)}, geoinfo={len(self.geoinfo_channels)}, "
-            f"steps={self.len})."
+        # source channels
+        self.source_channels = self.reader.source_channels
+        self.source_idx = self.reader.source_idx
+
+        # target channels
+        self.target_channels = self.reader.target_channels
+        self.target_idx = self.reader.target_idx
+
+        # target channel weights
+        self.target_channel_weights = self.reader.target_channel_weights
+
+        # geoinfo channels
+        self.geoinfo_channels = self.reader.geoinfo_channels
+        self.geoinfo_idx = self.reader.geoinfo_idx
+
+        # geoinfos at the offgrid points, one column per geoinfo channel
+        self.geoinfos = np.zeros((len(self.latitudes), 0), dtype=np.float32)
+        if offgrid.get("geoinfos") is not None:
+            self.geoinfos = np.load(offgrid["geoinfos"]).astype(np.float32)
+        assert self.geoinfos.shape == (len(self.latitudes), len(self.geoinfo_idx)), (
+            f"{ds_name}: offgrid.geoinfos must have shape "
+            f"({len(self.latitudes)}, {len(self.geoinfo_idx)}) to match the offgrid points and "
+            f"the geoinfo channels {list(self.geoinfo_channels)}, got {self.geoinfos.shape}."
         )
 
-    @override
-    def init_empty(self) -> None:
-        super().init_empty()
-        self.len = 0
-        self.n_points = 0
-        self.latitudes = np.zeros(0, dtype=np.float32)
-        self.longitudes = np.zeros(0, dtype=np.float32)
-        self._latlon = np.zeros((0, 2), dtype=np.float32)
-        self.geoinfos = np.zeros((0, 0), dtype=np.float32)
+        _logger.info(f"{ds_name}: offgrid points: {len(self.latitudes)}")
+        _logger.info(f"{ds_name}: source channels: {self.source_channels}")
+        _logger.info(f"{ds_name}: target channels: {self.target_channels}")
+        _logger.info(f"{ds_name}: geoinfo channels: {self.geoinfo_channels}")
 
     @override
     def length(self) -> int:
@@ -205,7 +184,8 @@ class DataReaderOffgrid(DataReaderTimestep):
 
     @override
     def _get(self, idx: TIndex, channels_idx: list[int]) -> ReaderData:
-        """Get offgrid samples for one time window.
+        """
+        Get data for window (for either source or target, through public interface)
 
         Parameters
         ----------
@@ -216,9 +196,7 @@ class DataReaderOffgrid(DataReaderTimestep):
 
         Returns
         -------
-        ReaderData
-            Window data with tiled coords/geoinfos, placeholder data fields,
-            and datetimes.
+        ReaderData providing coords, geoinfos, data, datetimes
         """
 
         (t_idxs, dtr) = self._get_dataset_idxs(idx)
@@ -227,23 +205,29 @@ class DataReaderOffgrid(DataReaderTimestep):
             return ReaderData.empty(
                 num_data_fields=len(channels_idx), num_geo_fields=len(self.geoinfo_idx)
             )
+
         assert t_idxs[0] >= 0, "index must be non-negative"
 
-        n_steps = len(t_idxs)
-        n_total = self.n_points * n_steps
+        # placeholder values since there is no data at the offgrid points
+        num_points = len(self.latitudes)
+        data = np.zeros((num_points * len(t_idxs), len(channels_idx)), dtype=np.float32)
 
-        # repeat the template coordinates for each timestep in the window
-        coords = np.tile(self._latlon, (n_steps, 1))
+        # repeat geoinfos len(t_idxs) times
+        geoinfos = np.vstack((self.geoinfos,) * len(t_idxs))
 
-        # offgrid reader provides no atmospheric values; keep placeholder zeros
-        data = np.zeros((n_total, len(channels_idx)), dtype=np.float32)
+        # construct lat/lon coords
+        latlon = np.concatenate(
+            [
+                np.expand_dims(self.latitudes, 0),
+                np.expand_dims(self.longitudes, 0),
+            ],
+            axis=0,
+        ).transpose()
+        # repeat latlon len(t_idxs) times
+        coords = np.vstack((latlon,) * len(t_idxs))
 
-        # repeat geoinfos for each timestep
-        geoinfos = np.tile(self.geoinfos, (n_steps, 1))
-
-        # compute absolute times for each step, then repeat per grid point
-        step_times = self.data_start_time + self.period * t_idxs
-        datetimes = np.repeat(step_times, self.n_points)
+        # date time matching #data points of data
+        datetimes = np.repeat(self.data_start_time + self.period * t_idxs, num_points)
 
         rd = ReaderData(
             coords=coords,
@@ -255,114 +239,77 @@ class DataReaderOffgrid(DataReaderTimestep):
 
         return rd
 
+    # normalization is that of the reader the stream was trained with; some readers implement
+    # their own instead of the mean / stdev scaling of the base class
 
-def _geoinfo_stats(
-    geoinfos: NDArray[np.float32],
-) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
-    """Per-column mean and standard deviation of the template geoinfos.
+    @override
+    def normalize_source_channels(self, source: NDArray) -> NDArray:
+        return self.reader.normalize_source_channels(source)
 
-    Standard deviations below 1e-6 are replaced by 1.0 so that normalization
-    never divides by (near) zero.
+    @override
+    def normalize_target_channels(self, target: NDArray) -> NDArray:
+        return self.reader.normalize_target_channels(target)
+
+    @override
+    def normalize_geoinfos(self, geoinfos: NDArray) -> NDArray:
+        return self.reader.normalize_geoinfos(geoinfos)
+
+    @override
+    def denormalize_source_channels(self, source: NDArray) -> NDArray:
+        return self.reader.denormalize_source_channels(source)
+
+    @override
+    def denormalize_target_channels(self, target: NDArray) -> NDArray:
+        return self.reader.denormalize_target_channels(target)
+
+
+def _grid_coords(grid: str) -> NDArray[np.float64]:
     """
-    if geoinfos.shape[1] == 0:
-        return np.zeros(0, dtype=np.float32), np.ones(0, dtype=np.float32)
+    Coordinates of a reduced Gaussian grid, north to south and eastwards from 0 deg
 
-    mean = np.mean(geoinfos, axis=0).astype(np.float32)
-    stdev = np.std(geoinfos, axis=0).astype(np.float32)
-    stdev[stdev < 1e-6] = 1.0
-    return mean, stdev
-
-
-def _read_reference_metadata(
-    filename: Path, stream_info: dict
-) -> tuple[
-    list[str],
-    NDArray[np.int64],
-    list[str],
-    NDArray[np.int64],
-    list[float],
-    NDArray[np.float32],
-    NDArray[np.float32],
-]:
-    """Read which channels the stream's real dataset exposes and their
-    normalization statistics, without building a full reader for it.
-
-    Offgrid never reads real data through this dataset -- it only needs to
-    know which channels the model was trained on and their mean/stdev, so
-    none of a full reader's windowed-indexing machinery (time window, period,
-    empty-window fallback) applies here. This intentionally duplicates the
-    small channel-selection rule from the underlying reader rather than
-    reusing it, to avoid depending on that reader's internals.
+    Parameters
+    ----------
+    grid :
+        "o<N>" for an octahedral grid (e.g. "o96") or "N<N>" for a classic one (e.g. "N320")
 
     Returns
     -------
-    Tuple of (source_channels, source_idx, target_channels, target_idx,
-    target_channel_weights, mean, stdev), in that order.
+    array of shape (num_points, 2) with [lat, lon] in degrees
     """
-    name = stream_info.get("name", "<unnamed>")
 
-    base_type = stream_info.get("base_type")
-    if base_type != "anemoi":
-        msg = (
-            f"Stream '{name}': offgrid streams currently only support "
-            f"base_type 'anemoi', got '{base_type}'."
-        )
-        raise ValueError(msg)
+    kind, num_lats = grid[0].lower(), int(grid[1:])
 
-    # Lazy import, matching the convention in registry.py.
-    import anemoi.datasets as anemoi_datasets
+    # Gaussian latitudes, north to south
+    x, _ = np.polynomial.legendre.leggauss(2 * num_lats)
+    lats = np.rad2deg(np.arcsin(x))[::-1]
 
-    ds0 = anemoi_datasets.open_dataset(filename)
+    # number of points on each latitude
+    if kind == "o":
+        half = 20 + 4 * np.arange(num_lats)
+        lons_per_lat = np.concatenate([half, half[::-1]])
+    else:
+        # classic grids follow a table, not a formula; eccodes ships it
+        import eccodes
 
-    source_idx = _select_anemoi_channels(stream_info, ds0, "source")
-    target_idx = _select_anemoi_channels(stream_info, ds0, "target")
-    target_channels = [ds0.variables[i] for i in target_idx]
+        handle = eccodes.codes_grib_new_from_samples(f"reduced_gg_pl_{num_lats}_grib2")
+        lons_per_lat = eccodes.codes_get_array(handle, "pl")
+        eccodes.codes_release(handle)
 
-    channel_weights = stream_info.get("channel_weights")
-    target_channel_weights = [
-        channel_weights.get(ch, 1.0) if channel_weights else 1.0 for ch in target_channels
-    ]
+    lat = np.repeat(lats, lons_per_lat)
+    lon = np.concatenate([np.arange(n) * (360.0 / n) for n in lons_per_lat])
 
-    return (
-        [ds0.variables[i] for i in source_idx],
-        source_idx,
-        target_channels,
-        target_idx,
-        target_channel_weights,
-        np.array(ds0.statistics["mean"], copy=True),
-        np.array(ds0.statistics["stdev"], copy=True),
-    )
-
-
-def _select_anemoi_channels(stream_info: dict, ds0, ch_type: str) -> NDArray[np.int64]:
-    """Select source/target channel indices from a raw anemoi dataset.
-
-    Mirrors DataReaderAnemoi's rule: every non-forcing, non-constant-in-time
-    variable is included unless it's named in `<ch_type>_exclude`, or
-    `<ch_type>` is given as an explicit allow-list.
-    """
-    channels = stream_info.get(ch_type)
-    channels_exclude = stream_info.get(ch_type + "_exclude", [])
-    chs_idx = np.sort(
-        [
-            ds0.name_to_index[k]
-            for (k, v) in ds0.typed_variables.items()
-            if (
-                not v.is_computed_forcing
-                and not v.is_constant_in_time
-                and (np.array([f == k for f in channels]).any() if channels is not None else True)
-                and not np.array([f == k for f in channels_exclude]).any()
-            )
-        ]
-    )
-    return np.array(chs_idx, dtype=np.int64)
+    return np.stack([lat, lon], axis=1)
 
 
 def _clip_lat(lats: NDArray) -> NDArray[np.float32]:
-    """Clip latitudes to the range [-90, 90] and ensure periodicity."""
+    """
+    Clip latitudes to the range [-90, 90] and ensure periodicity.
+    """
     return (2 * np.clip(lats, -90.0, 90.0) - lats).astype(np.float32)
 
 
 def _clip_lon(lons: NDArray) -> NDArray[np.float32]:
-    """Clip longitudes to the range [-180, 180] and ensure periodicity."""
+    """
+    Clip longitudes to the range [-180, 180] and ensure periodicity.
+    """
     return ((lons + 180.0) % 360.0 - 180.0).astype(np.float32)
