@@ -30,11 +30,12 @@ the trained model. It has to be repeated because ``type`` now selects this reade
 (see ``_grid_coords``). All points are returned: ``max_num_targets`` of the trained model is not
 applied; set ``offgrid.max_num_targets`` to limit them.
 
-The coordinates and geoinfos come from the offgrid files instead of the dataset, and ``_get``
-returns placeholder values instead of data. Channels and normalization are taken from the
-reader of ``base_type``, so they are the ones the model was trained with, whatever the format
-of the dataset. For a stream with several files the points are returned once, by the reader of
-the first file.
+The model input (source) of the stream stays what it is: the data read by the reader of
+``base_type``. Only the points the model predicts at (target) change: their coordinates and
+geoinfos come from the offgrid files, with placeholder values where a dataset would have data.
+Channels and normalization are taken from the reader of ``base_type`` as well, so they are the
+ones the model was trained with, whatever the format of the dataset. For a stream with several
+files the offgrid points are returned once, by the reader of the first file.
 """
 
 import logging
@@ -114,7 +115,7 @@ class DataReaderOffgrid(DataReaderTimestep):
         self.len = int((tw_handler.t_end - tw_handler.t_start) / period)
 
         # reader the stream was trained with, selected as in MultiStreamDataSampler; it provides
-        # the channels and the normalization, no data is read from it
+        # the channels, the normalization and the source data
         match stream_info["base_type"]:
             case "obs":
                 dataset = DataReaderObs
@@ -128,6 +129,14 @@ class DataReaderOffgrid(DataReaderTimestep):
         self.reader = dataset(
             tw_handler=tw_handler, filename=filename, stream_info=stream_info, stage=stage
         )
+        # If that reader is empty, its dataset has no data in the data loader window and there
+        # are no channels to predict; the stream is skipped, as the reader does itself
+        if len(self.reader.source_channels) + len(self.reader.target_channels) == 0:
+            _logger.warning(
+                f"{ds_name} is not supported over data loader window. Stream is skipped."
+            )
+            self.init_empty()
+            return
 
         # caches lats and lons; coords names a default grid or a file with the points
         if re.fullmatch(r"[oOnN]\d+", str(offgrid["coords"])):
@@ -176,8 +185,31 @@ class DataReaderOffgrid(DataReaderTimestep):
         _logger.info(f"{ds_name}: geoinfo channels: {self.geoinfo_channels}")
 
     @override
+    def init_empty(self) -> None:
+        super().init_empty()
+        self.len = 0
+
+    @override
     def length(self) -> int:
         return self.len
+
+    @override
+    def get_source(self, idx: TIndex) -> ReaderData:
+        """
+        Get source data for idx
+
+        The model input is the data of the stream itself; only the targets are offgrid.
+
+        Parameters
+        ----------
+        idx : int
+            Index of temporal window
+
+        Returns
+        -------
+        source data (coords, geoinfos, data, datetimes)
+        """
+        return self.reader.get_source(idx)
 
     @override
     def _get(self, idx: TIndex, channels_idx: list[int]) -> ReaderData:
