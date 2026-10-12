@@ -33,7 +33,8 @@ applied; set ``offgrid.max_num_targets`` to limit them.
 The coordinates and geoinfos come from the offgrid files instead of the dataset, and ``_get``
 returns placeholder values instead of data. Channels and normalization are taken from the
 reader of ``base_type``, so they are the ones the model was trained with, whatever the format
-of the dataset.
+of the dataset. For a stream with several files the points are returned once, by the reader of
+the first file.
 """
 
 import logging
@@ -96,10 +97,10 @@ class DataReaderOffgrid(DataReaderTimestep):
 
         # there is no data at the offgrid points, hence nothing to train on
         assert stage != TRAIN, f"{ds_name}: offgrid streams are for inference only."
-        # the offgrid points would otherwise be returned once per file
-        assert len(stream_info.get("filenames", [])) <= 1, (
-            f"{ds_name}: offgrid streams take at most one entry in 'filenames'."
-        )
+        # one reader is built per file of the stream; only the reader of the first file returns
+        # the offgrid points, they would otherwise be returned once per file
+        filenames = stream_info.get("filenames", [])
+        self.is_first_file = len(filenames) == 0 or Path(filename).name == Path(filenames[0]).name
 
         # the offgrid samples cover the data loader window at a fixed frequency
         period = parse_timedelta(offgrid.get("frequency", tw_handler.t_window_step))
@@ -197,7 +198,7 @@ class DataReaderOffgrid(DataReaderTimestep):
 
         (t_idxs, dtr) = self._get_dataset_idxs(idx)
 
-        if self.len == 0 or len(t_idxs) == 0:
+        if not self.is_first_file or self.len == 0 or len(t_idxs) == 0:
             return ReaderData.empty(
                 num_data_fields=len(channels_idx), num_geo_fields=len(self.geoinfo_idx)
             )

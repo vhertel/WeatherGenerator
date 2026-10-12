@@ -28,7 +28,7 @@ streams:
     base_type: obs
     offgrid:
       # points to run at: a default grid (o96, N320) or the absolute path of an
-      # (N, 2) .npy array of [lat, lon] in degrees. All points are used.
+      # (N, 2) .npy array of [lat, lon] in degrees
       coords: N320
       # (N, G) array with one column per entry of the stream's geoinfo_channels,
       # in that order; required if the stream has geoinfo_channels, otherwise
