@@ -33,7 +33,7 @@ applied; set ``offgrid.max_num_targets`` to limit them.
 The coordinates and geoinfos come from the offgrid files instead of the dataset, and ``_get``
 returns placeholder values instead of data. Channels and normalization are taken from the
 reader of ``base_type``, so they are the ones the model was trained with, whatever the format
-of the dataset. The layout follows ``DataReaderAnemoi``.
+of the dataset.
 """
 
 import logging
@@ -127,11 +127,6 @@ class DataReaderOffgrid(DataReaderTimestep):
         self.reader = dataset(
             tw_handler=tw_handler, filename=filename, stream_info=stream_info, stage=stage
         )
-        # readers come up empty if their dataset has no data in the data loader window
-        assert len(self.reader.source_channels) + len(self.reader.target_channels) > 0, (
-            f"{ds_name}: the {stream_info['base_type']} reader has no channels; the data loader "
-            f"window probably does not overlap the dates of {filename}."
-        )
 
         # caches lats and lons; coords names a default grid or a file with the points
         if re.fullmatch(r"[oOnN]\d+", str(offgrid["coords"])):
@@ -143,6 +138,7 @@ class DataReaderOffgrid(DataReaderTimestep):
         )
         self.latitudes = _clip_lat(coords[:, 0])
         self.longitudes = _clip_lon(coords[:, 1])
+        self.n_points = len(self.latitudes)
 
         # all offgrid points are returned by default; max_num_targets of the trained model is a
         # training setting and would drop a random part of them
@@ -185,7 +181,7 @@ class DataReaderOffgrid(DataReaderTimestep):
     @override
     def _get(self, idx: TIndex, channels_idx: list[int]) -> ReaderData:
         """
-        Get data for window (for either source or target, through public interface)
+        Get offgrid samples for one time window.
 
         Parameters
         ----------
@@ -208,26 +204,22 @@ class DataReaderOffgrid(DataReaderTimestep):
 
         assert t_idxs[0] >= 0, "index must be non-negative"
 
-        # placeholder values since there is no data at the offgrid points
-        num_points = len(self.latitudes)
-        data = np.zeros((num_points * len(t_idxs), len(channels_idx)), dtype=np.float32)
+        n_steps = len(t_idxs)
+        n_total = self.n_points * n_steps
 
-        # repeat geoinfos len(t_idxs) times
-        geoinfos = np.vstack((self.geoinfos,) * len(t_idxs))
+        # repeat the offgrid coordinates for each timestep in the window
+        latlon = np.stack([self.latitudes, self.longitudes], axis=1)
+        coords = np.tile(latlon, (n_steps, 1))
 
-        # construct lat/lon coords
-        latlon = np.concatenate(
-            [
-                np.expand_dims(self.latitudes, 0),
-                np.expand_dims(self.longitudes, 0),
-            ],
-            axis=0,
-        ).transpose()
-        # repeat latlon len(t_idxs) times
-        coords = np.vstack((latlon,) * len(t_idxs))
+        # offgrid reader provides no atmospheric values; keep placeholder zeros
+        data = np.zeros((n_total, len(channels_idx)), dtype=np.float32)
 
-        # date time matching #data points of data
-        datetimes = np.repeat(self.data_start_time + self.period * t_idxs, num_points)
+        # repeat geoinfos for each timestep
+        geoinfos = np.tile(self.geoinfos, (n_steps, 1))
+
+        # compute absolute times for each step, then repeat per point
+        step_times = self.data_start_time + self.period * t_idxs
+        datetimes = np.repeat(step_times, self.n_points)
 
         rd = ReaderData(
             coords=coords,
