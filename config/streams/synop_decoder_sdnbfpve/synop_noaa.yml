@@ -1,0 +1,36 @@
+# (C) Copyright 2025 WeatherGenerator contributors.
+#
+# This software is licensed under the terms of the Apache Licence Version 2.0
+# which can be obtained at http://www.apache.org/licenses/LICENSE-2.0.
+#
+# In applying this licence, ECMWF does not waive the privileges and immunities
+# granted to it by virtue of its status as an intergovernmental organisation
+# nor does it submit to any jurisdiction.
+
+# The only trained stream: NOAA GHCN-h SYNOP, decoded from the frozen latent state.
+
+SYNOP:
+  # obs_wind: obs reader that adds obsvalue_wind_direction_sin / _cos, computed from the wind
+  # direction in degrees (packages/readers_extra/.../data_reader_obs_wind.py)
+  type: obs_wind
+  stream_id: 31
+  filenames: [observations-noaa-ghcnh-1979-2025-qc-v1.zarr]
+  coords_channels: [latitude, longitude]
+  geoinfo_channels: [elevation, cos_latitude, sin_latitude, cos_longitude, sin_longitude]
+  # source: [obsvalue_temperature, obsvalue_dew_point_temperature, obsvalue_station_level_pressure, obsvalue_u, obsvalue_v]
+  # target: [obsvalue_temperature, obsvalue_dew_point_temperature, obsvalue_station_level_pressure, obsvalue_u, obsvalue_v]
+  source: [obsvalue_temperature, obsvalue_station_level_pressure, obsvalue_wind_speed, obsvalue_wind_direction_sin, obsvalue_wind_direction_cos]
+  target: [obsvalue_temperature, obsvalue_station_level_pressure, obsvalue_wind_speed, obsvalue_wind_direction_sin, obsvalue_wind_direction_cos]
+  # wind direction is two channels, so each counts half to weigh it like a single channel
+  channel_weights: {obsvalue_wind_direction_sin: 0.5, obsvalue_wind_direction_cos: 0.5}
+  loss_weight: 1.0
+  diagnostic: true
+  masking_rate: 0.6
+  masking_rate_none: 0.05
+  token_size: 512
+  tokenize_spacetime: false
+  max_num_targets: -1
+  embed: {net: transformer, num_tokens: 1, num_heads: 2, dim_embed: 256, num_blocks: 2}
+  embed_target_coords: {net: linear, dim_embed: 512}
+  target_readout: {num_layers: 4, num_heads: 8}
+  pred_head: {ens_size: 1, num_layers: 2}
