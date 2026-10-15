@@ -72,7 +72,7 @@ training_config:
     enabled: False
   teacher_time_offset: 0
 
-  num_mini_epochs: 4
+  num_mini_epochs: 12
   samples_per_mini_epoch: 4096
   shuffle: True
 
