@@ -392,10 +392,19 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
 
             # local coords: each flag enabled in the stream config adds its features
             cfg_lcoords = ds.info.target_coords.local_coords
-            if cfg_lcoords.relative_to_reference_point is not False:
-                if cfg_lcoords.relative_to_reference_point != "all":
-                    # position of target points wrt a single reference point of healpix cell
-                    features_per_stream += 3
+
+            # relative position wrt reference point
+            cfg_ref_points = cfg_lcoords.relative_to_reference_point
+            assert (
+                cfg_ref_points is False
+                or cfg_ref_points == "all"
+                or OmegaConf.is_list(cfg_ref_points)
+            ), "relative_to_reference_point must be False, 'all', or a list of reference points"
+
+            if cfg_ref_points is not False:
+                if cfg_ref_points != "all":
+                    # position of target points wrt the specified reference points of healpix cell
+                    features_per_stream += 3 * len(cfg_ref_points)
                 else:
                     # position of target points wrt all reference points of healpix cell
                     features_per_stream += 5 * 3
