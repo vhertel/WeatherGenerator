@@ -88,17 +88,22 @@ class Tokenizer:
         for _verts, rot in transforms:
             # Compute local coordinates
             verts = torch.stack(_verts)
-            # shape: <healpix, 4, 3>
+            # shape: <4, healpix, 3>
             verts = verts.transpose(0, 1)
             # Batch multiplication by the 3x3 rotation matrices.
             # shape: <healpix, 3, 3> @ <healpix, 4, 3> -> <healpix, 4, 3>
             # Needs to transpose first to <healpix, 3, 4> then transpose back.
             t1 = torch.bmm(rot, verts.transpose(-1, -2)).transpose(-2, -1)
             t2 = ref - t1
-            self.verts_local.append(t2.flatten(1, 2))
+            self.verts_local.append(t2)
 
         self.hpy_verts_local_target = torch.stack(self.verts_local).transpose(0, 1)
-
+        # compute normalization factors
+        self.hpy_verts_diff_mean = self.hpy_verts_local_target.mean(axis = (0,1,2))
+        self.hpy_verts_diff_std = self.hpy_verts_local_target.std(axis = (0,1,2))
+        
+        self.hpy_verts_local_target = self.hpy_verts_local_target.flatten(2, 3)
+        
         # add local coords wrt to center of neighboring cells
         # (since the neighbors are used in the prediction)
         num_healpix_cells = 12 * 4**self.hl_target

@@ -178,6 +178,7 @@ class TokenizerMasking(Tokenizer):
             self.hpy_verts_rots_target,
             self.hpy_verts_local_target,
             self.hpy_nctrs_target,
+            [self.hpy_verts_diff_mean, self.hpy_verts_diff_std],
             encode_times_target,
         )
 
@@ -210,6 +211,7 @@ class TokenizerMasking(Tokenizer):
             self.hpy_verts_rots_target,
             self.hpy_verts_local_target,
             self.hpy_nctrs_target,
+            [self.hpy_verts_diff_mean, self.hpy_verts_diff_std],
             encode_times_target,
         )
 

@@ -319,6 +319,7 @@ def tokenize_apply_mask_target(
     hpy_verts_rots,
     hpy_verts_local,
     hpy_nctrs,
+    verts_diff_norm_factors,
     enc_time,
 ):
     """
@@ -386,6 +387,7 @@ def tokenize_apply_mask_target(
             hpy_verts_rots,
             hpy_verts_local,
             hpy_nctrs,
+            verts_diff_norm_factors,
         )
         coords_local.requires_grad = False
     else:
@@ -403,10 +405,10 @@ def get_source_coords_local(
 
     # remove padding from coords
     posr3 = s2tor3(*theta_phi_to_standard_coords(coords))
-    posr3[0, 0] = 0.0
-    posr3[0, 1] = 0.0
-    posr3[0, 2] = 0.0
-
+    # posr3[0, 0] = 0.0
+    # posr3[0, 1] = 0.0
+    # posr3[0, 2] = 0.0
+    
     rots = torch.repeat_interleave(hpy_verts_rots, masked_points_per_cell, dim=0)
     # BMM only works for b x n x m and b x m x 1
     # adding a dummy dimension to posr3
@@ -428,6 +430,7 @@ def get_target_coords_local(
     verts_rots,
     verts_local,
     nctrs,
+    verts_diff_norm_factors
 ):
     """Generate local coordinates for target coords w.r.t healpix cell vertices and
     and for healpix cell vertices themselves
@@ -466,7 +469,8 @@ def get_target_coords_local(
 
     # local coords: each flag enabled in the stream config adds its features
     local_coords = compute_local_coords(
-        cfg_tcoords.local_coords, verts_rots, tcs, verts_local, nctrs
+        cfg_tcoords.local_coords, verts_rots, tcs, verts_local, nctrs,
+        verts_diff_norm_factors = verts_diff_norm_factors if cfg_tcoords.local_coords.normalization else None
     )
     tcoords_features.extend(local_coords)
 
@@ -484,7 +488,7 @@ def get_target_coords_local(
     return a
 
 
-def compute_local_coords(cfg_lcoords, verts_rots, tcs, verts_local, nctrs):
+def compute_local_coords(cfg_lcoords, verts_rots, tcs, verts_local, nctrs, verts_diff_norm_factors):
     """Compute local coordinates for target coords.
     Each set enabled in cfg_lcoords adds its features.
     """
@@ -511,7 +515,13 @@ def compute_local_coords(cfg_lcoords, verts_rots, tcs, verts_local, nctrs):
             rots = list(cell_points_rots.keys())
 
         for rot in rots:
-            local_coords.append(ref - locs_to_cell_coords_ctrs(cell_points_rots[rot], tcs))
+            lcoord = ref - locs_to_cell_coords_ctrs(cell_points_rots[rot], tcs)
+            
+            # Normalization
+            if verts_diff_norm_factors is not None:
+                lcoord = (lcoord - verts_diff_norm_factors[0])/verts_diff_norm_factors[1]
+            
+            local_coords.append(lcoord)
 
     if cfg_lcoords.cell_shape is True:
         # positions of the points of healpix cell wrt each other
@@ -526,11 +536,21 @@ def compute_local_coords(cfg_lcoords, verts_rots, tcs, verts_local, nctrs):
             ],
             0,
         )
+        # Normalization
+        if verts_diff_norm_factors is not None:
+            vls = (vls.reshape(*vls.shape[:2],4,3) - verts_diff_norm_factors[0])/verts_diff_norm_factors[1]
+            vls = vls.flatten(2,3)
         local_coords.append(vls.flatten(1, 2))
 
     if cfg_lcoords.relative_to_nbors is True:
         # position of target points wrt centers of neighboring healpix cells
         tcs_ctrs = torch.cat([ref - torch.cat(locs_to_ctr_coords(c, tcs)) for c in nctrs], -1)
+        
+        # Normalization
+        if verts_diff_norm_factors is not None:
+            tcs_ctrs = (tcs_ctrs.reshape(tcs_ctrs.shape[0],8,3) - (2*verts_diff_norm_factors[0]))/(2*verts_diff_norm_factors[1])
+            tcs_ctrs = tcs_ctrs.flatten(1,2)
+            
         local_coords.append(tcs_ctrs)
-
+        
     return local_coords
